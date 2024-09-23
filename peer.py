@@ -32,108 +32,34 @@ def serve(port_queue):
     p2p_pb2_grpc.add_P2PServiceServicer_to_server(P2PService(), server)
     port = server.add_insecure_port('[::]:0')  # Bind to an available port
     server.start()
-    print(f"Peer server started on port {port}")
-    port_queue.put(port)  # Put the port number in the queue
+    port_queue.put(port)
     server.wait_for_termination()
-
-def partition_file(file_path, chunk_size=1024):
-    with open(file_path, 'rb') as f:
-        chunk_number = 0
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk_number, chunk
-            chunk_number += 1
-
-def upload_file(tracker_stub, file_path):
-    peers = discover_peers(tracker_stub, os.path.basename(file_path))
-    if not peers:
-        print("No peers available to upload the file.")
-        return
-
-    peer_stubs = [p2p_pb2_grpc.P2PServiceStub(grpc.insecure_channel(peer)) for peer in peers]
-    num_peers = len(peer_stubs)
-
-    for chunk_number, chunk in partition_file(file_path):
-        peer_stub = peer_stubs[chunk_number % num_peers]
-        file_chunk = p2p_pb2.FileChunk(filename=os.path.basename(file_path), data=chunk, chunk_number=chunk_number)
-        response = peer_stub.UploadFile(file_chunk)
-        if not response.success:
-            print(f"Failed to upload chunk {chunk_number} to peer {peers[chunk_number % num_peers]}")
-
-    # Register the file chunks with the tracker
-    for i, peer in enumerate(peers):
-        peer_stub = peer_stubs[i]
-        file_info = p2p_pb2.FileInfo(filename=os.path.basename(file_path), peer_address=peer)
-        tracker_stub.RegisterFile(file_info)
-
-def download_file(stub, filename, chunk_number):
-    request = p2p_pb2.FileRequest(filename=filename, chunk_number=chunk_number)
-    response = stub.DownloadFile(request)
-    for file_chunk in response:
-        os.makedirs('downloads', exist_ok=True)  # Ensure the downloads directory exists
-        file_path = os.path.join('downloads', f"{filename}.part{file_chunk.chunk_number}")
-        with open(file_path, 'wb') as f:
-            f.write(file_chunk.data)
-
-def discover_peers(tracker_stub, filename):
-    request = p2p_pb2.FileRequest(filename=filename)
-    response = tracker_stub.QueryPeers(request)
-    return response.peers
 
 def register_peer(tracker_stub, address, files):
     peer_info = p2p_pb2.PeerInfo(address=address, files=files)
-    response = tracker_stub.RegisterPeer(peer_info)
-    return response.success
+    tracker_stub.RegisterPeer(peer_info)
 
-def synchronize_files(tracker_stub, peer_stub, filename):
-    peers = discover_peers(tracker_stub, filename)
-    for peer_address in peers:
-        if peer_address != f'localhost:{port}':  # Skip self
-            peer_channel = grpc.insecure_channel(peer_address)
-            peer_stub = p2p_pb2_grpc.P2PServiceStub(peer_channel)
-            chunk_number = 0
-            while True:
-                try:
-                    download_file(peer_stub, filename, chunk_number)
-                    chunk_number += 1
-                except:
-                    break
-
-def replicate_file(tracker_stub, filename, replication_factor=3):
-    peers = discover_peers(tracker_stub, filename)
-    for chunk_number in range(len(peers)):
-        for _ in range(replication_factor - 1):
-            for peer_address in peers:
-                if peer_address != f'localhost:{port}':  # Skip self
-                    peer_channel = grpc.insecure_channel(peer_address)
-                    peer_stub = p2p_pb2_grpc.P2PServiceStub(peer_channel)
-                    download_file(peer_stub, filename, chunk_number)
-                    upload_file(peer_stub, f"{filename}.part{chunk_number}")
-
-def search_file(tracker_stub, filename):
-    peers = discover_peers(tracker_stub, filename)
-    if not peers:
-        print(f"File {filename} not found in the network.")
-    return peers
+def upload_file(tracker_stub, file_path):
+    filename = os.path.basename(file_path)
+    with open(file_path, 'rb') as f:
+        content = f.read()
+    file_info = p2p_pb2.FileInfo(filename=filename, content=content)
+    tracker_stub.UploadFile(file_info)
 
 def retrieve_file(tracker_stub, filename):
-    peers = search_file(tracker_stub, filename)
-    if peers:
-        for peer_address in peers:
-            peer_channel = grpc.insecure_channel(peer_address)
-            peer_stub = p2p_pb2_grpc.P2PServiceStub(peer_channel)
-            chunk_number = 0
-            while True:
-                try:
-                    download_file(peer_stub, filename, chunk_number)
-                    chunk_number += 1
-                except:
-                    break
+    file_request = p2p_pb2.FileRequest(filename=filename)
+    file_info = tracker_stub.RetrieveFile(file_request)
+    if file_info:
+        with open(filename, 'wb') as f:
+            f.write(file_info.content)
         print(f"File {filename} retrieved successfully.")
     else:
         print(f"File {filename} could not be retrieved.")
+
+def discover_peers(tracker_stub, filename):
+    file_request = p2p_pb2.FileRequest(filename=filename)
+    peer_list = tracker_stub.DiscoverPeers(file_request)
+    return [peer.address for peer in peer_list.peers]
 
 def interactive_mode(tracker_stub):
     while True:
@@ -175,7 +101,7 @@ def main():
     port = port_queue.get()
 
     # Connect to the tracker
-    tracker_channel = grpc.insecure_channel('localhost:50053')  # Ensure this matches the tracker's port
+    tracker_channel = grpc.insecure_channel('172.31.86.16:50053')  # Updated to use the private IP address
     tracker_stub = p2p_pb2_grpc.TrackerServiceStub(tracker_channel)
 
     # Register the peer with the tracker
