@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package p2p;
+
+service P2PService {
+    rpc UploadFile (FileChunk) returns (UploadResponse);
+    rpc DownloadFile (FileRequest) returns (stream FileChunk);
+}
+
+service TrackerService {
+    rpc RegisterPeer (PeerInfo) returns (RegisterResponse);
+    rpc QueryPeers (FileRequest) returns (PeerList);
+}
+
+message FileChunk {
+    string filename = 1;
+    bytes data = 2;
+    int32 chunk_number = 3;
+}
+
+message FileRequest {
+    string filename = 1;
+    int32 chunk_number = 2;
+}
+
+message UploadResponse {
+    bool success = 1;
+}
+
+message PeerInfo {
+    string address = 1;
+    repeated string files = 2;
+}
+
+message RegisterResponse {
+    bool success = 1;
+}
+
+message PeerList {
+    repeated string peers = 1;
+}
